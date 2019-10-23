@@ -103,7 +103,7 @@ class TOTPDevice(ThrottlingMixin, Device):
         else:
             key = self.bin_key
 
-            totp = TOTP(key, self.step, self.t0, self.digits, self.drift)
+            totp = TOTP(key, self.step, int(self.t0), self.digits, self.drift)
             totp.time = time.time()
 
             verified = totp.verify(token, self.tolerance, self.last_t + 1)
