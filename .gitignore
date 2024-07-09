@@ -1,6 +1,14 @@
-# setuptools
-/MANIFEST
-/build/
+# Python
+__pycache__/
+*.py[co]
+
+# builds
 /dist/
 /docs/build/
-*.egg-info/
+
+# test
+*.sqlite3
+/test/config/env-*.toml
+
+# Other tools
+/.coverage

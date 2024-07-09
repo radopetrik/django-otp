@@ -1,3 +1,5 @@
+.. vim: tw=80 lbr
+
 Extending Django-OTP
 ====================
 
@@ -13,7 +15,7 @@ A :class:`~django_otp.models.Device` subclass is only required to implement one
 method:
 
 .. automethod:: django_otp.models.Device.verify_token
-    :noindex:
+   :noindex:
 
 Most devices will also need to define one or more model fields to do anything
 interesting. Here's a simple implementation of a generic TOTP device::
@@ -31,7 +33,7 @@ interesting. Here's a simple implementation of a generic TOTP device::
         key = models.CharField(max_length=80,
                                validators=[hex_validator()],
                                default=lambda: random_hex(20),
-                               help_text=u'A hex-encoded secret key of up to 40 bytes.')
+                               help_text='A hex-encoded secret key of up to 40 bytes.')
 
         @property
         def bin_key(self):
@@ -58,7 +60,27 @@ If a device uses a challenge-response algorithm or requires some other kind of
 user interaction, it should implement an additional method:
 
 .. automethod:: django_otp.models.Device.generate_challenge
-    :noindex:
+   :noindex:
+
+
+Helpers
+-------
+
+:mod:`django_otp.models` also provides a few mixins and other helpers for
+common functionality. These are entirely optional, but can be helpful for common
+functionality.
+
+.. autoclass:: django_otp.models.SideChannelDevice
+   :members: generate_token, verify_token
+
+.. autoclass:: django_otp.models.CooldownMixin
+   :members: get_cooldown_duration, generate_is_allowed, cooldown_reset, cooldown_set
+
+.. autoclass:: django_otp.models.ThrottlingMixin
+   :members: get_throttle_factor, verify_is_allowed, throttle_reset, throttle_increment
+
+.. autoclass:: django_otp.models.TimestampMixin
+   :members: set_last_used_timestamp
 
 
 .. _utilities:

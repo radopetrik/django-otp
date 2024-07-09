@@ -1,3 +1,312 @@
+v1.5.0 - April 16, 2024 - Support segno for QR codes
+--------------------------------------------------------------------------------
+
+- `#141`_: Support alternative QR code library `segno`_.
+
+  Previously, only the `qrcode`_ library was supported.
+
+  Use ``segno`` by installing ``django-otp[segno]`` or just install the
+  ``segno`` package.
+
+.. _#141: https://github.com/django-otp/django-otp/issues/141
+.. _segno: https://pypi.python.org/pypi/segno/
+
+
+v1.4.1 - April 10, 2024 - Minor EmailDevice updates
+--------------------------------------------------------------------------------
+
+- `#140`_: Support customization of email delivery.
+
+  See the :class:`~django_otp.plugins.otp_email.models.EmailDevice`
+  documentation for API details.
+
+- Support translation of the "sent by email" message.
+
+.. _#140: https://github.com/django-otp/django-otp/pull/140
+
+
+v1.4.0 - April 09, 2024 - Add TimestampMixin
+--------------------------------------------------------------------------------
+
+- `#137`_: Add TimestampMixin
+
+  Add a new TimestampMixin with ``created_at`` and ``last_used_at`` fields for
+  device models.
+
+  All builtin plugins now have these timestamp fields and require migrating.
+
+- Some documentation cleanup.
+
+.. _#137: https://github.com/django-otp/django-otp/pull/137
+
+
+v1.3.0 - November 08, 2023 - Support cooldowns for token generation
+--------------------------------------------------------------------------------
+
+- `#122`_: Added throttling to token generation.
+
+  Devices that generate random tokens can take advantage of the new
+  :class:`~django_otp.models.CooldownMixin` to enforce limits on how frequently
+  new tokens can be generated (and presumably delivered).
+  :class:`~django_otp.plugins.otp_email.models.EmailDevice` uses this and has a
+  :setting:`default cooldown <OTP_EMAIL_COOLDOWN_DURATION>` configured.
+
+  Thanks to `Demetris Stavrou`_ for this feature.
+
+- Note: :class:`~django_otp.models.VerifyNotAllowed` is now an
+  :class:`~enum.Enum`. This will break any code that inadvisably hard-coded the
+  string value of the `N_FAILED_ATTEMPTS` property.
+
+.. _#122: https://github.com/django-otp/django-otp/pull/122
+.. _Demetris Stavrou: https://github.com/demestav
+
+
+v1.2.4 - October 05, 2023 - Portuguese translation
+--------------------------------------------------------------------------------
+
+- `#133`_: Add pt-PT translation.
+
+.. _#133: https://github.com/django-otp/django-otp/pull/133
+
+
+v1.2.3 - September 17, 2023 - German translation fix
+--------------------------------------------------------------------------------
+
+- `#131`_: Fix German translation
+
+.. _#131: https://github.com/django-otp/django-otp/pull/131
+
+
+v1.2.2 - June 16, 2023 - otp_email html support
+--------------------------------------------------------------------------------
+
+- `#125`_: Support email body_html templates
+
+.. _#125: https://github.com/django-otp/django-otp/pull/125
+
+
+v1.2.1 - May 26, 2023 - pt-BR translations
+--------------------------------------------------------------------------------
+
+- `#124`_: Add pt-BR translations.
+
+.. _#124: https://github.com/django-otp/django-otp/pull/124
+
+
+v1.2.0 - May 11, 2023 - Tooling, TOTP images
+--------------------------------------------------------------------------------
+
+- This project is now managed with `hatch`_, which replaces setuptools, pipenv,
+  and tox. Users of the package should not be impacted. Developers can refer to
+  the readme for details. If you're packaging this project from source, I
+  suggest relying on pip's isolated builds rather than using hatch directly.
+
+- `#123`_: Add support for passing an image parameter in the otpauth URL.
+  See :setting:`OTP_TOTP_IMAGE`.
+
+
+.. _hatch: https://hatch.pypa.io/
+.. _#123: https://github.com/django-otp/django-otp/pull/123
+
+
+v1.1.6 - March 07, 2023 - German translation
+--------------------------------------------------------------------------------
+
+- `#116`_: Add German translation
+
+.. _#116: https://github.com/django-otp/django-otp/pull/116
+
+
+v1.1.5 - March 06, 2023 - Bugfix release
+--------------------------------------------------------------------------------
+
+- `#115`_: Force OTP_EMAIL_SUBJECT to be a string
+
+.. _#115: https://github.com/django-otp/django-otp/pull/115
+
+
+v1.1.4 - November 10, 2022 - Spanish translation
+--------------------------------------------------------------------------------
+
+- `#106`_: Add Spanish translation
+
+.. _#106: https://github.com/django-otp/django-otp/pull/106
+
+
+v1.1.3 - November 30, 2021 - Admin template fix
+--------------------------------------------------------------------------------
+
+- `#89`_: Use the standard `username` context variable for compatibility.
+
+.. _#89: https://github.com/django-otp/django-otp/pull/89
+
+
+v1.1.2 - November 29, 2021 - Forward compatibility
+--------------------------------------------------------------------------------
+
+- `#93`_: Default to AutoField to avoid spurious migrations.
+
+.. _#93: https://github.com/django-otp/django-otp/issues/93
+
+
+
+v1.1.1 - September 14, 2021 - Throttling message fix
+--------------------------------------------------------------------------------
+
+- `#87`_: Fix ``locked_until`` key in throttling reason map.
+
+.. _#87: https://github.com/django-otp/django-otp/issues/87
+
+
+v1.1.0 - September 13, 2021 - Concurrent verification
+--------------------------------------------------------------------------------
+
+Where possible, all APIs now verify tokens atomically. This prevents race
+conditions that could result in a token being verified twice as well as closing
+gaps in throttling enforcement. Low-level integrators may still need to
+:ref:`manage their own transactions <Low-Level API>`.
+
+
+v1.0.6 - May 28, 2021 - Email customization
+--------------------------------------------------------------------------------
+
+- `#82`_: Add ability to pass extra context when rendering
+  :class:`~django_otp.plugins.otp_email.models.EmailDevice` templates.
+
+.. _#82: https://github.com/django-otp/django-otp/issues/82
+
+
+
+v1.0.5 - May 08, 2021 - config_url fix
+--------------------------------------------------------------------------------
+
+- `#77`_: Force username to a string in `config_url`. Note that this might not
+  produce a very human-friendly result, but it shouldn't throw an exception.
+
+.. _#77: https://github.com/django-otp/django-otp/issues/77
+
+
+v1.0.4 - April 28, 2021 - Dark mode fix
+--------------------------------------------------------------------------------
+
+- `#76`_: Django 3.2 supports the prefers-color-scheme media query, so we need
+  to force a white background for QR codes.
+
+.. _#76: https://github.com/django-otp/django-otp/issues/76
+
+
+v1.0.3 - April 03, 2021 - Email body template path setting
+--------------------------------------------------------------------------------
+
+- `#71`_: Provide time at which throttling lock expires.
+
+.. _#71: https://github.com/django-otp/django-otp/issues/71
+
+
+v1.0.2 - October 23, 2020 - Email body template path setting
+--------------------------------------------------------------------------------
+
+- Added a setting to load the email body template from a template file.
+
+
+v1.0.1 - October 06, 2020 - Add French translations
+--------------------------------------------------------------------------------
+
+- Added contributed French string translations.
+
+
+v1.0.0 - August 13, 2020 - Update supported Django verisons.
+--------------------------------------------------------------------------------
+
+- Dropped support for Django < 2.2.
+
+
+v0.9.4 - August 05, 2020 - Django 3.1 support
+--------------------------------------------------------------------------------
+
+- `#49`_: Hide the navigation sidebar on the login page.
+
+.. _#49: https://github.com/django-otp/django-otp/issues/49
+
+
+v0.9.3 - June 23, 2020 - June 18, 2020 - Admin fix
+--------------------------------------------------------------------------------
+
+- Stricter authorization checks for qrcodes in the admin interface.
+
+
+v0.9.1 - May 08, 2020 - Admin fix
+--------------------------------------------------------------------------------
+
+- `#38`_: Update admin fields for
+  :class:`~django_otp.plugins.otp_email.models.EmailDevice`.
+
+.. _#38: https://github.com/django-otp/django-otp/pull/38
+
+
+v0.9.0 - April 17, 2020 - Improved email device
+--------------------------------------------------------------------------------
+
+:class:`~django_otp.models.SideChannelDevice` is a new abstract device class to
+simplify writing devices that deliver tokens to the user by other channels
+(email, SMS, etc.).
+
+- `#33`_, `#34`_ (`arjan-s`_): Implement
+  :class:`~django_otp.models.SideChannelDevice`, reimplement
+  :class:`~django_otp.plugins.otp_email.models.EmailDevice` on top of it, and
+  add a few settings for customization.
+
+- Add rate limiting to
+  :class:`~django_otp.plugins.otp_email.models.EmailDevice` and
+  :class:`~django_otp.plugins.otp_static.models.StaticDevice`.
+
+
+.. _#33: https://github.com/django-otp/django-otp/pull/33
+.. _#34: https://github.com/django-otp/django-otp/pull/34
+.. _arjan-s: https://github.com/arjan-s
+
+
+v0.8.1 - February 08, 2020 - Admin fix
+--------------------------------------------------------------------------------
+
+- `#26`_: Display OTP Token field on the login page even when user has not yet
+  authenticated.
+
+.. _#26: https://github.com/django-otp/django-otp/issues/26
+
+
+v0.8.0 - February 06, 2020 - Drop Python 2 support
+--------------------------------------------------------------------------------
+
+- `#17`_: Drop Python 2 support.
+
+- `#18`_: Back to a single login template for now.
+
+- `#23`_: Allow :setting:`OTP_HOTP_ISSUER` and :setting:`OTP_TOTP_ISSUER` to be
+  callable.
+
+.. _#17: https://github.com/django-otp/django-otp/pull/17
+.. _#18: https://github.com/django-otp/django-otp/pull/18
+.. _#23: https://github.com/django-otp/django-otp/pull/23
+
+
+v0.7.5 - December 27, 2019 - Django 3.0 support
+--------------------------------------------------------------------------------
+
+- `#15`_: Add admin template for Django 3.0.
+
+.. _#15: https://github.com/django-otp/django-otp/issues/15
+
+
+v0.7.4 - November 21, 2019 - Cleanup
+--------------------------------------------------------------------------------
+
+- `#10`_: Remove old admin login templates that are confusing some unrelated
+  tools.
+
+.. _#10: https://github.com/django-otp/django-otp/issues/10
+
+
 v0.7.3 - October 22, 2019 - Minor improvements
 ----------------------------------------------
 
@@ -43,9 +352,7 @@ v0.6.0 - April 22, 2019 - Failure throttling
 v0.5.2 - February 11 - 2019 - Fix URL encoding
 ----------------------------------------------
 
-- `PR 39`_: Fix encoding of otpauth:// URL parameters.
-
-.. _PR 39: https://bitbucket.org/psagers/django-otp/pull-requests/39
+- Fix encoding of otpauth:// URL parameters.
 
 
 v0.5.1 - October 24, 2018 - Customizable error messages
@@ -81,9 +388,7 @@ v0.4.1 - August 29, 2017 - Misc fixes
 
 - Improved handling of device persistent identifiers.
 
-- Fix `#25`_: make sure default keys are unicode values.
-
-.. _#25: https://bitbucket.org/psagers/django-otp/issues/25/attributeerror-bytes-object-has-no
+- Make sure default keys are unicode values.
 
 
 v0.4.0 - July 19, 2017 - Update support matrix
@@ -115,14 +420,12 @@ v0.3.12 - April 2, 2017 - Forward compatibility
 v0.3.11 - March 8, 2017 - Built-in QR Code support
 --------------------------------------------------
 
-- `#20`_: Generate HOTP and TOTP otpauth URLs and corresponding QR Codes. To
-  enable this feature, install ``django-otp[qrcode]`` or just install the
-  `qrcode`_ package.
+- Generate HOTP and TOTP otpauth URLs and corresponding QR Codes. To enable this
+  feature, install ``django-otp[qrcode]`` or just install the `qrcode`_ package.
 
 - Support for Python 2.6 and Django 1.4 were dropped in this version (long
   overdue).
 
-.. _#20: https://bitbucket.org/psagers/django-otp/issues/20/how-to-pair-from-the-admin
 .. _qrcode: https://pypi.python.org/pypi/qrcode/
 
 
@@ -146,15 +449,11 @@ v0.3.7 - September 24, 2016 - Convenience API
 v0.3.6 - September 4, 2016 - Django 1.10
 ----------------------------------------
 
-- `#11`_: Don't break the laziness of ``request.user``.
+- Don't break the laziness of ``request.user``.
 
-- `#16`_: Improved error message for invalid tokens.
+- Improved error message for invalid tokens.
 
-- `#17`_: Support the new middleware API in Django 1.10.
-
-.. _#11: https://bitbucket.org/psagers/django-otp/issues/11/wasteful-queries-on-every-request
-.. _#16: https://bitbucket.org/psagers/django-otp/issues/16/inappropriate-error-when-_verify_token
-.. _#17: https://bitbucket.org/psagers/django-otp/issues/17/django-110-new-style-middleware
+- Support the new middleware API in Django 1.10.
 
 
 v0.3.5 - April 13, 2016 - Fix default TOTP key

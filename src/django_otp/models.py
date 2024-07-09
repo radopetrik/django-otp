@@ -1,6 +1,5 @@
-from __future__ import absolute_import, division, print_function, unicode_literals
-
-import six
+from datetime import timedelta
+import enum
 
 from django.apps import apps
 from django.conf import settings
@@ -9,12 +8,15 @@ from django.db import models
 from django.utils import timezone
 from django.utils.functional import cached_property
 
+from .util import random_number_token
+
 
 class DeviceManager(models.Manager):
     """
     The :class:`~django.db.models.Manager` object installed as
     ``Device.objects``.
     """
+
     def devices_for_user(self, user, confirmed=None):
         """
         Returns a queryset for all devices of this class that belong to the
@@ -26,6 +28,7 @@ class DeviceManager(models.Manager):
         :param confirmed: If ``None``, all matching devices are returned.
             Otherwise, this can be any true or false value to limit the query
             to confirmed or unconfirmed devices, respectively.
+
         """
         devices = self.model.objects.filter(user=user)
         if confirmed is not None:
@@ -70,23 +73,29 @@ class Device(models.Model):
     .. attribute:: objects
 
         A :class:`~django_otp.models.DeviceManager`.
+
     """
-    user = models.ForeignKey(getattr(settings, 'AUTH_USER_MODEL', 'auth.User'), help_text="The user that this device belongs to.", on_delete=models.CASCADE)
-    name = models.CharField(max_length=64, help_text="The human-readable name of this device.")
-    confirmed = models.BooleanField(default=True, help_text="Is this device ready for use?")
+
+    user = models.ForeignKey(
+        getattr(settings, 'AUTH_USER_MODEL', 'auth.User'),
+        help_text="The user that this device belongs to.",
+        on_delete=models.CASCADE,
+    )
+
+    name = models.CharField(
+        max_length=64, help_text="The human-readable name of this device."
+    )
+
+    confirmed = models.BooleanField(
+        default=True, help_text="Is this device ready for use?"
+    )
 
     objects = DeviceManager()
 
-    class Meta(object):
+    class Meta:
         abstract = True
 
     def __str__(self):
-        if six.PY3:
-            return self.__unicode__()
-        else:
-            return self.__unicode__().encode('utf-8')
-
-    def __unicode__(self):
         try:
             user = self.user
         except ObjectDoesNotExist:
@@ -96,6 +105,9 @@ class Device(models.Model):
 
     @property
     def persistent_id(self):
+        """
+        A stable device identifier for forms and APIs.
+        """
         return '{0}/{1}'.format(self.model_label(), self.id)
 
     @classmethod
@@ -109,11 +121,16 @@ class Device(models.Model):
         return '{0}.{1}'.format(cls._meta.app_label, cls._meta.model_name)
 
     @classmethod
-    def from_persistent_id(cls, persistent_id):
+    def from_persistent_id(cls, persistent_id, for_verify=False):
         """
         Loads a device from its persistent id::
 
             device == Device.from_persistent_id(device.persistent_id)
+
+        :param bool for_verify: If ``True``, we'll load the device with
+            :meth:`~django.db.models.query.QuerySet.select_for_update` to
+            prevent concurrent verifications from succeeding. In which case,
+            this must be called inside a transaction.
 
         """
         device = None
@@ -124,7 +141,10 @@ class Device(models.Model):
 
             device_cls = apps.get_model(app_label, model_name)
             if issubclass(device_cls, Device):
-                device = device_cls.objects.filter(id=int(device_id)).first()
+                device_set = device_cls.objects.filter(id=int(device_id))
+                if for_verify:
+                    device_set = device_set.select_for_update()
+                device = device_set.first()
         except (ValueError, LookupError):
             pass
 
@@ -132,23 +152,41 @@ class Device(models.Model):
 
     def is_interactive(self):
         """
-        Returns ``True`` if this is an interactive device. The default
-        implementation returns ``True`` if
+        Returns ``True`` if this is an interactive device.
+
+        The default implementation returns ``True`` if
         :meth:`~django_otp.models.Device.generate_challenge` has been
         overridden, but subclasses are welcome to provide smarter
         implementations.
 
         :rtype: bool
+
         """
         return not hasattr(self.generate_challenge, 'stub')
+
+    def generate_is_allowed(self):
+        """
+        Checks whether it is permissible to call :meth:`generate_challenge`.
+
+        If it is allowed, returns ``(True, None)``. Otherwise returns ``(False,
+        data_dict)``, where ``data_dict`` contains extra information, defined
+        by the implementation.
+
+        This method can be used to implement throttling of token generation for
+        interactive devices. Client code should check this method before
+        calling :meth:`generate_challenge` and report problems to the user.
+
+        """
+        return (True, None)
 
     def generate_challenge(self):
         """
         Generates a challenge value that the user will need to produce a token.
+
         This method is permitted to have side effects, such as transmitting
         information to the user through some other channel (email or SMS,
-        perhaps). And, of course, some devices may need to commit the
-        challenge to the database.
+        perhaps). And, of course, some devices may need to commit the challenge
+        to the database.
 
         :returns: A message to the user. This should be a string that fits
             comfortably in the template ``'OTP Challenge: {0}'``. This may
@@ -157,14 +195,17 @@ class Device(models.Model):
 
         :raises: Any :exc:`~exceptions.Exception` is permitted. Callers should
             trap ``Exception`` and report it to the user.
+
         """
         return None
+
     generate_challenge.stub = True
 
     def verify_is_allowed(self):
         """
-        Checks whether it is permissible to call :meth:`verify_token`. If it is
-        allowed, returns ``(True, None)``. Otherwise returns ``(False,
+        Checks whether it is permissible to call :meth:`verify_token`.
+
+        If it is allowed, returns ``(True, None)``. Otherwise returns ``(False,
         data_dict)``, where ``data_dict`` contains extra information, defined
         by the implementation.
 
@@ -187,16 +228,214 @@ class Device(models.Model):
 
     def verify_token(self, token):
         """
-        Verifies a token. As a rule, the token should no longer be valid if
-        this returns ``True``.
+        Verifies a token.
 
-        :param string token: The OTP token provided by the user.
+        As a rule, the token should no longer be valid if this returns
+        ``True``.
+
+        :param str token: The OTP token provided by the user.
         :rtype: bool
+
         """
         return False
 
 
-class VerifyNotAllowed:
+class SideChannelDevice(Device):
+    """
+    Abstract base model for a side-channel :term:`device` attached to a user.
+
+    This model implements token generation, verification and expiration, so the
+    concrete devices only have to implement delivery.
+
+    .. attribute:: token
+
+        The token most recently generated for the user.
+
+    .. attribute:: valid_until
+
+        The datetime at which the stored token will expire.
+
+    """
+
+    token = models.CharField(max_length=16, blank=True, null=True)
+
+    valid_until = models.DateTimeField(
+        default=timezone.now,
+        help_text="The timestamp of the moment of expiry of the saved token.",
+    )
+
+    class Meta:
+        abstract = True
+
+    def generate_token(self, length=6, valid_secs=300, commit=True):
+        """
+        Generates a token of the specified length, then sets it on the model
+        and sets the expiration of the token on the model.
+
+        :param int length: Number of decimal digits in the generated token.
+        :param int valid_secs: Amount of seconds the token should be valid.
+        :param bool commit: Pass False if you intend to save the instance
+            yourself.
+
+        """
+        self.token = random_number_token(length)
+        self.valid_until = timezone.now() + timedelta(seconds=valid_secs)
+        if commit:
+            self.save()
+
+    def verify_token(self, token):
+        """
+        Verifies a token by content and expiry.
+
+        On success, the token is cleared and the device saved.
+
+        :param str token: The OTP token provided by the user.
+        :rtype: bool
+
+        """
+        _now = timezone.now()
+
+        if (
+            (self.token is not None)
+            and (token == self.token)
+            and (_now < self.valid_until)
+        ):
+            self.token = None
+            self.valid_until = _now
+            self.save()
+
+            return True
+        else:
+            return False
+
+
+class GenerateNotAllowed(enum.Enum):
+    """
+    Constants that may be returned in the ``reason`` member of the extra
+    information dictionary returned by
+    :meth:`~django_otp.models.Device.generate_is_allowed`.
+
+    .. data:: COOLDOWN_DURATION_PENDING
+
+       Indicates that a token was generated recently and we're waiting for the
+       cooldown period to expire.
+
+    """
+
+    COOLDOWN_DURATION_PENDING = 'COOLDOWN_DURATION_PENDING'
+
+
+class CooldownMixin(models.Model):
+    """
+    Mixin class for models requiring a cooldown duration between challenge
+    generations.
+
+    Subclass must implement :meth:`get_cooldown_duration`, and must use the
+    :meth:`generate_is_allowed` method from within their generate_challenge()
+    method. Further it must use :meth:`cooldown_set` when a token is generated.
+
+    See the implementation of
+    :class:`~django_otp.plugins.otp_email.models.EmailDevice` for an example.
+
+    .. attribute:: last_generated_timestamp
+
+        The last time a token was generated for this device.
+
+    """
+
+    last_generated_timestamp = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="The last time a token was generated for this device.",
+    )
+
+    class Meta:
+        abstract = True
+
+    def generate_is_allowed(self):
+        """
+        If token generation is allowed, returns ``(True, None)``. Otherwise,
+        returns ``(False, data_dict)``.
+
+        ``data_dict`` contains further information. Currently it can be::
+
+            {
+                'reason': GenerateNotAllowed.COOLDOWN_DURATION_PENDING,
+                'next_generation_at': when,
+            }
+
+        where ``when`` is a datetime marking the end of the cooldown period.
+        See :class:`GenerateNotAllowed`.
+
+        """
+        dt_now = timezone.now()
+        if (
+            not self.last_generated_timestamp
+            or (dt_now - self.last_generated_timestamp).total_seconds()
+            > self.get_cooldown_duration()
+        ):
+            return super().generate_is_allowed()
+        else:
+            return False, {
+                'reason': GenerateNotAllowed.COOLDOWN_DURATION_PENDING,
+                'next_generation_at': self.last_generated_timestamp
+                + timedelta(seconds=self.get_cooldown_duration()),
+            }
+
+    def cooldown_reset(self, commit=True):
+        """
+        Call this method to reset cooldown (normally after a successful
+        verification).
+
+        :param bool commit: Pass False if you intend to save the instance
+            yourself.
+
+        """
+        self.last_generated_timestamp = None
+        if commit:
+            self.save()
+
+    def cooldown_set(self, commit=True):
+        """
+        Call this method to set the cooldown timestamp to now (normally when
+        a token is generated).
+
+        :param bool commit: Pass False if you intend to save the instance
+            yourself.
+
+        """
+        self.last_generated_timestamp = timezone.now()
+        if commit:
+            self.save()
+
+    def verify_token(self, token):
+        """
+        Reset the throttle if the token is valid.
+        """
+        verified = super().verify_token(token)
+        if verified:
+            self.cooldown_reset()
+
+        return verified
+
+    @cached_property
+    def cooldown_enabled(self):
+        return self.get_cooldown_duration() > 0
+
+    def get_cooldown_duration(self):
+        """
+        This must be implemented to return the cooldown duration in seconds.
+
+        A duration of 0 disables the cooldown.
+
+        Normally this is just a wrapper for a plugin-specific setting like
+        :setting:`OTP_EMAIL_COOLDOWN_DURATION`.
+
+        """
+        raise NotImplementedError()
+
+
+class VerifyNotAllowed(enum.Enum):
     """
     Constants that may be returned in the ``reason`` member of the extra
     information dictionary returned by
@@ -209,25 +448,48 @@ class VerifyNotAllowed:
        in member ``failure_count``
 
     """
+
     N_FAILED_ATTEMPTS = 'N_FAILED_ATTEMPTS'
 
 
 class ThrottlingMixin(models.Model):
     """
-    Mixin class for models that need throttling behaviour. Implements
-    exponential back-off.
+    Mixin class for models that want throttling behaviour.
+
+    This implements exponential back-off for verifying tokens. Subclasses must
+    implement :meth:`get_throttle_factor`, and must use the
+    :meth:`verify_is_allowed`, :meth:`throttle_reset` and
+    :meth:`throttle_increment` methods from within their verify_token() method.
+
+    See the implementation of
+    :class:`~django_otp.plugins.otp_email.models.EmailDevice` for an example.
+
+    .. attribute:: throttling_failure_timestamp
+
+        The datetime of the last failed verification attempt.
+
+    .. attribute:: throttling_failure_count
+
+        The number of consecutive failed verification attempts.
+
     """
-    # This mixin is not publicly documented, but is used internally to avoid
-    # code duplication. Subclasses must implement get_throttle_factor(), and
-    # must use the verify_is_allowed(), throttle_reset() and
-    # throttle_increment() methods from within their verify_token() method.
+
     throttling_failure_timestamp = models.DateTimeField(
-        null=True, blank=True, default=None,
-        help_text="A timestamp of the last failed verification attempt. Null if last attempt succeeded."
+        null=True,
+        blank=True,
+        default=None,
+        help_text=(
+            "A timestamp of the last failed verification attempt. Null if last attempt"
+            " succeeded."
+        ),
     )
+
     throttling_failure_count = models.PositiveIntegerField(
         default=0, help_text="Number of successive failed attempts."
     )
+
+    class Meta:
+        abstract = True
 
     def verify_is_allowed(self):
         """
@@ -236,34 +498,46 @@ class ThrottlingMixin(models.Model):
 
         ``data_dict`` contains further information. Currently it can be::
 
-            {'reason': VerifyNotAllowed.N_FAILED_ATTEMPTS,
-             'failure_count': n
+            {
+                'reason': VerifyNotAllowed.N_FAILED_ATTEMPTS,
+                'failure_count': n
             }
 
         where ``n`` is the number of successive failures. See
         :class:`~django_otp.models.VerifyNotAllowed`.
+
         """
-        if (self.throttling_enabled and
-                self.throttling_failure_count > 0 and
-                self.throttling_failure_timestamp is not None):
+        if (
+            self.throttling_enabled
+            and self.throttling_failure_count > 0
+            and self.throttling_failure_timestamp is not None
+        ):
             now = timezone.now()
             delay = (now - self.throttling_failure_timestamp).total_seconds()
             # Required delays should be 1, 2, 4, 8 ...
-            delay_required = self.get_throttle_factor() * (2 ** (self.throttling_failure_count - 1))
+            delay_required = self.get_throttle_factor() * (
+                2 ** (self.throttling_failure_count - 1)
+            )
             if delay < delay_required:
-                return (False,
-                        {'reason': VerifyNotAllowed.N_FAILED_ATTEMPTS,
-                         'failure_count': self.throttling_failure_count,
-                         })
+                return (
+                    False,
+                    {
+                        'reason': VerifyNotAllowed.N_FAILED_ATTEMPTS,
+                        'failure_count': self.throttling_failure_count,
+                        'locked_until': self.throttling_failure_timestamp
+                        + timedelta(seconds=delay_required),
+                    },
+                )
 
-        return super(ThrottlingMixin, self).verify_is_allowed()
+        return super().verify_is_allowed()
 
     def throttle_reset(self, commit=True):
         """
         Call this method to reset throttling (normally when a verify attempt
         succeeded).
 
-        Pass 'commit=False' to avoid calling self.save().
+        :param bool commit: Pass False if you intend to save the instance
+            yourself.
 
         """
         self.throttling_failure_timestamp = None
@@ -276,7 +550,8 @@ class ThrottlingMixin(models.Model):
         Call this method to increase throttling (normally when a verify attempt
         failed).
 
-        Pass 'commit=False' to avoid calling self.save().
+        :param bool commit: Pass False if you intend to save the instance
+            yourself.
 
         """
         self.throttling_failure_timestamp = timezone.now()
@@ -288,8 +563,69 @@ class ThrottlingMixin(models.Model):
     def throttling_enabled(self):
         return self.get_throttle_factor() > 0
 
-    def get_throttle_factor(self):
+    def get_throttle_factor(self):  # pragma: no cover
+        """
+        This must be implemented to return the throttle factor.
+
+        The number of seconds required between verification attempts will be
+        :math:`c2^{n-1}` where `c` is this factor and `n` is the number of
+        previous failures. A factor of 1 translates to delays of 1, 2, 4, 8,
+        etc. seconds. A factor of 0 disables the throttling.
+
+        Normally this is just a wrapper for a plugin-specific setting like
+        :setting:`OTP_EMAIL_THROTTLE_FACTOR`.
+
+        """
         raise NotImplementedError()
+
+
+class TimestampMixin(models.Model):
+    """
+    Mixin class that adds timestamps to devices.
+
+    This mixin adds fields to record when a device was initially created in the
+    system and when it was last used. It enhances the ability to audit device
+    usage and lifecycle.
+
+    Subclasses can use :meth:`set_last_used_timestamp` to update the
+    `last_used_at` timestamp whenever the device is used for verification.
+
+    .. attribute:: created_at
+
+        The datetime at which this device was created.
+
+    .. attribute:: last_used_at
+
+        The datetime at which this device was last successfully used for
+        verification.
+
+    """
+
+    created_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        auto_now_add=True,
+        help_text="The date and time when this device was initially created in the system.",
+    )
+
+    last_used_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="The most recent date and time this device was used.",
+    )
 
     class Meta:
         abstract = True
+
+    def set_last_used_timestamp(self, commit=True):
+        """
+        Updates the `last_used_at` field to the current datetime to indicate
+        that the device has been used.
+
+        :param bool commit: Pass False if you intend to save the instance
+            yourself.
+
+        """
+        self.last_used_at = timezone.now()
+        if commit:
+            self.save()

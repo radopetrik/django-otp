@@ -1,16 +1,21 @@
-from __future__ import absolute_import, division, print_function, unicode_literals
-
+from django.contrib.admin import AdminSite
+from django.contrib.auth.models import Permission
+from django.contrib.contenttypes.models import ContentType
 from django.db import IntegrityError
+from django.test import RequestFactory
+from django.test.utils import override_settings
 
 from django_otp.forms import OTPAuthenticationForm
-from django_otp.tests import TestCase
+from django_otp.tests import TestCase, ThrottlingTestMixin, TimestampTestMixin
 
+from .admin import StaticDeviceAdmin, StaticTokenInline
 from .lib import add_static_token
-from .models import StaticDevice
+from .models import StaticDevice, StaticToken
 
 
 class DeviceTest(TestCase):
-    """ A few generic tests to get us started. """
+    """A few generic tests to get us started."""
+
     def setUp(self):
         try:
             self.user = self.create_user('alice', 'password')
@@ -32,6 +37,7 @@ class LibTest(TestCase):
     """
     Test miscellaneous library functions.
     """
+
     def setUp(self):
         try:
             self.user = self.create_user('alice', 'password')
@@ -69,6 +75,7 @@ class AuthFormTest(TestCase):
     We try to honor custom user models, but if we can't create users, we'll
     skip the tests.
     """
+
     def setUp(self):
         for device_id, username in enumerate(['alice', 'bob']):
             try:
@@ -163,3 +170,98 @@ class AuthFormTest(TestCase):
         alice = form.get_user()
         self.assertEqual(alice.get_username(), 'alice')
         self.assertIsNotNone(alice.otp_device)
+
+
+@override_settings(
+    OTP_STATIC_THROTTLE_FACTOR=1,
+)
+class ThrottlingTestCase(ThrottlingTestMixin, TestCase):
+    def setUp(self):
+        try:
+            user = self.create_user('alice', 'password')
+        except IntegrityError:
+            self.skipTest("Unable to create a test user.")
+        else:
+            self.device = user.staticdevice_set.create()
+            self.device.token_set.create(token='valid1')
+            self.device.token_set.create(token='valid2')
+            self.device.token_set.create(token='valid3')
+
+    def valid_token(self):
+        return self.device.token_set.first().token
+
+    def invalid_token(self):
+        return 'bogus'
+
+
+class TimestampTestCase(TimestampTestMixin, TestCase):
+    def setUp(self):
+        try:
+            user = self.create_user('alice', 'password')
+        except IntegrityError:
+            self.skipTest("Unable to create a test user.")
+        else:
+            self.device = user.staticdevice_set.create()
+            self.device.token_set.create(token='valid1')
+            self.device.token_set.create(token='valid2')
+            self.device.token_set.create(token='valid3')
+
+    def valid_token(self):
+        return self.device.token_set.first().token
+
+    def invalid_token(self):
+        return 'bogus'
+
+
+class StaticDeviceAdminTest(TestCase):
+    def setUp(self):
+        try:
+            self.admin = self.create_user(
+                'admin',
+                'password',
+                email='admin@example.com',
+                is_staff=True,
+            )
+        except IntegrityError:
+            self.skipTest("Unable to create test user.")
+        else:
+            self.device = self.admin.staticdevice_set.create()
+        self.device_admin = StaticDeviceAdmin(StaticDevice, AdminSite())
+        self.get_request = RequestFactory().get('/')
+        self.get_request.user = self.admin
+
+    @override_settings(OTP_ADMIN_HIDE_SENSITIVE_DATA=True)
+    def test_inline_instances_when_sensitive_information_hidden(self):
+        self._add_device_perms('change_statictoken')
+        instances = self.device_admin.get_inline_instances(self.get_request, obj=None)
+        self.assertIsInstance(instances, list)
+        self.assertEqual(len(instances), 1)
+        self.assertIsInstance(instances[0], StaticTokenInline)
+        instances = self.device_admin.get_inline_instances(
+            self.get_request, obj=self.device
+        )
+        self.assertEqual(instances, [])
+
+    @override_settings(OTP_ADMIN_HIDE_SENSITIVE_DATA=False)
+    def test_inline_instances_when_sensitive_information_shown(self):
+        self._add_device_perms('change_statictoken')
+        for obj in (None, self.device):
+            instances = self.device_admin.get_inline_instances(
+                self.get_request, obj=obj
+            )
+            self.assertIsInstance(instances, list)
+            self.assertEqual(len(instances), 1)
+
+    #
+    # Helpers
+    #
+
+    def _add_device_perms(self, *codenames):
+        ct = ContentType.objects.get_for_models(StaticDevice, StaticToken)
+
+        perms = [
+            Permission.objects.get(content_type__in=ct.values(), codename=codename)
+            for codename in codenames
+        ]
+
+        self.admin.user_permissions.add(*perms)

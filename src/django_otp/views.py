@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function, unicode_literals
-
 from functools import partial
 
 from django.contrib.auth import BACKEND_SESSION_KEY
@@ -22,6 +20,7 @@ class LoginView(auth_views.LoginView):
     :setting:`OTP_LOGIN_URL`.
 
     """
+
     otp_authentication_form = OTPAuthenticationForm
     otp_token_form = OTPTokenForm
 
@@ -42,7 +41,7 @@ class LoginView(auth_views.LoginView):
         if not hasattr(user, 'backend'):
             user.backend = self.request.session[BACKEND_SESSION_KEY]
 
-        return super(LoginView, self).form_valid(form)
+        return super().form_valid(form)
 
 
 # Backwards compatibility.

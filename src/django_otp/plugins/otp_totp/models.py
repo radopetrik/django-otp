@@ -1,30 +1,25 @@
-from __future__ import absolute_import, division, print_function, unicode_literals
-
 from base64 import b32encode
 from binascii import unhexlify
 import time
-
-from six import string_types
-from six.moves.urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode
 
 from django.conf import settings
 from django.db import models
-from django.utils.encoding import force_text
 
-from django_otp.models import Device, ThrottlingMixin
+from django_otp.models import Device, ThrottlingMixin, TimestampMixin
 from django_otp.oath import TOTP
 from django_otp.util import hex_validator, random_hex
 
 
 def default_key():
-    return force_text(random_hex(20))
+    return random_hex(20)
 
 
 def key_validator(value):
     return hex_validator()(value)
 
 
-class TOTPDevice(ThrottlingMixin, Device):
+class TOTPDevice(TimestampMixin, ThrottlingMixin, Device):
     """
     A generic TOTP :class:`~django_otp.models.Device`. The model fields mostly
     correspond to the arguments to :func:`django_otp.oath.totp`. They all have
@@ -71,13 +66,35 @@ class TOTPDevice(ThrottlingMixin, Device):
         subsequently. (Default: -1)
 
     """
-    key = models.CharField(max_length=80, validators=[key_validator], default=default_key, help_text="A hex-encoded secret key of up to 40 bytes.")
-    step = models.PositiveSmallIntegerField(default=30, help_text="The time step in seconds.")
-    t0 = models.BigIntegerField(default=0, help_text="The Unix time at which to begin counting steps.")
-    digits = models.PositiveSmallIntegerField(choices=[(6, 6), (8, 8)], default=6, help_text="The number of digits to expect in a token.")
-    tolerance = models.PositiveSmallIntegerField(default=1, help_text="The number of time steps in the past or future to allow.")
-    drift = models.SmallIntegerField(default=0, help_text="The number of time steps the prover is known to deviate from our clock.")
-    last_t = models.BigIntegerField(default=-1, help_text="The t value of the latest verified token. The next token must be at a higher time step.")
+
+    key = models.CharField(
+        max_length=80,
+        validators=[key_validator],
+        default=default_key,
+        help_text="A hex-encoded secret key of up to 40 bytes.",
+    )
+    step = models.PositiveSmallIntegerField(
+        default=30, help_text="The time step in seconds."
+    )
+    t0 = models.BigIntegerField(
+        default=0, help_text="The Unix time at which to begin counting steps."
+    )
+    digits = models.PositiveSmallIntegerField(
+        choices=[(6, 6), (8, 8)],
+        default=6,
+        help_text="The number of digits to expect in a token.",
+    )
+    tolerance = models.PositiveSmallIntegerField(
+        default=1, help_text="The number of time steps in the past or future to allow."
+    )
+    drift = models.SmallIntegerField(
+        default=0,
+        help_text="The number of time steps the prover is known to deviate from our clock.",
+    )
+    last_t = models.BigIntegerField(
+        default=-1,
+        help_text="The t value of the latest verified token. The next token must be at a higher time step.",
+    )
 
     class Meta(Device.Meta):
         verbose_name = "TOTP device"
@@ -112,6 +129,7 @@ class TOTPDevice(ThrottlingMixin, Device):
                 if OTP_TOTP_SYNC:
                     self.drift = totp.drift
                 self.throttle_reset(commit=False)
+                self.set_last_used_timestamp(commit=False)
                 self.save()
 
         if not verified:
@@ -129,9 +147,10 @@ class TOTPDevice(ThrottlingMixin, Device):
 
         See https://github.com/google/google-authenticator/wiki/Key-Uri-Format.
         The issuer is taken from :setting:`OTP_TOTP_ISSUER`, if available.
+        The image (for e.g. FreeOTP) is taken from :setting:`OTP_TOTP_IMAGE`, if available.
 
         """
-        label = self.user.get_username()
+        label = str(self.user.get_username())
         params = {
             'secret': b32encode(self.bin_key),
             'algorithm': 'SHA1',
@@ -140,12 +159,26 @@ class TOTPDevice(ThrottlingMixin, Device):
         }
         urlencoded_params = urlencode(params)
 
-        issuer = getattr(settings, 'OTP_TOTP_ISSUER', None)
-        if isinstance(issuer, string_types) and (issuer != ''):
+        issuer = self._read_str_from_settings('OTP_TOTP_ISSUER')
+        if issuer:
             issuer = issuer.replace(':', '')
             label = '{}:{}'.format(issuer, label)
-            urlencoded_params += '&issuer={}'.format(quote(issuer))  # encode issuer as per RFC 3986, not quote_plus
+            urlencoded_params += '&issuer={}'.format(
+                quote(issuer)
+            )  # encode issuer as per RFC 3986, not quote_plus
+
+        image = self._read_str_from_settings('OTP_TOTP_IMAGE')
+        if image:
+            urlencoded_params += "&image={}".format(quote(image, safe=':/'))
 
         url = 'otpauth://totp/{}?{}'.format(quote(label), urlencoded_params)
 
         return url
+
+    def _read_str_from_settings(self, key):
+        val = getattr(settings, key, None)
+        if callable(val):
+            val = val(self)
+        if isinstance(val, str) and (val != ''):
+            return val
+        return None

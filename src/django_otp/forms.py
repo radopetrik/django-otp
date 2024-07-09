@@ -1,15 +1,14 @@
-from __future__ import absolute_import, division, print_function, unicode_literals
-
 from django import forms
 from django.contrib.auth.forms import AuthenticationForm
-from django.utils.translation import ugettext_lazy as _
-from django.utils.translation import ungettext_lazy
+from django.db import transaction
+from django.utils.translation import gettext_lazy as _
+from django.utils.translation import ngettext_lazy
 
 from . import devices_for_user, match_token
 from .models import Device, VerifyNotAllowed
 
 
-class OTPAuthenticationFormMixin(object):
+class OTPAuthenticationFormMixin:
     """
     Shared functionality for
     :class:`~django.contrib.auth.forms.AuthenticationForm` subclasses that wish
@@ -56,17 +55,23 @@ class OTPAuthenticationFormMixin(object):
             )
 
     """
+
     otp_error_messages = {
         'token_required': _('Please enter your OTP token.'),
         'challenge_exception': _('Error generating challenge: {0}'),
         'not_interactive': _('The selected OTP device is not interactive'),
         'challenge_message': _('OTP Challenge: {0}'),
-        'invalid_token': _('Invalid token. Please make sure you have entered it correctly.'),
-        'n_failed_attempts': ungettext_lazy(
+        'invalid_token': _(
+            'Invalid token. Please make sure you have entered it correctly.'
+        ),
+        'n_failed_attempts': ngettext_lazy(
             "Verification temporarily disabled because of %(failure_count)d failed attempt, please try again soon.",
             "Verification temporarily disabled because of %(failure_count)d failed attempts, please try again soon.",
-            "failure_count"),
-        'verification_not_allowed': _("Verification of the token is currently disabled"),
+            "failure_count",
+        ),
+        'verification_not_allowed': _(
+            "Verification of the token is currently disabled"
+        ),
     }
 
     def clean_otp(self, user):
@@ -82,27 +87,40 @@ class OTPAuthenticationFormMixin(object):
         if user is None:
             return
 
-        device = self._chosen_device(user)
-        token = self.cleaned_data.get('otp_token')
+        validation_error = None
+        with transaction.atomic():
+            try:
+                device = self._chosen_device(user)
+                token = self.cleaned_data.get('otp_token')
 
-        user.otp_device = None
+                user.otp_device = None
 
-        try:
-            if self.cleaned_data.get('otp_challenge'):
-                self._handle_challenge(device)
-            elif token:
-                user.otp_device = self._verify_token(user, token, device)
-            else:
-                raise forms.ValidationError(self.otp_error_messages['token_required'], code='token_required')
-        finally:
-            if user.otp_device is None:
-                self._update_form(user)
+                try:
+                    if self.cleaned_data.get('otp_challenge'):
+                        self._handle_challenge(device)
+                    elif token:
+                        user.otp_device = self._verify_token(user, token, device)
+                    else:
+                        raise forms.ValidationError(
+                            self.otp_error_messages['token_required'],
+                            code='token_required',
+                        )
+                finally:
+                    if user.otp_device is None:
+                        self._update_form(user)
+            except forms.ValidationError as e:
+                # Validation errors shouldn't abort the transaction, so we have
+                # to carefully transport them out.
+                validation_error = e
+
+        if validation_error:
+            raise validation_error
 
     def _chosen_device(self, user):
         device_id = self.cleaned_data.get('otp_device')
 
         if device_id:
-            device = Device.from_persistent_id(device_id)
+            device = Device.from_persistent_id(device_id, for_verify=True)
         else:
             device = None
 
@@ -110,7 +128,7 @@ class OTPAuthenticationFormMixin(object):
         # have the list of choices until we authenticate the user. Without the
         # following, an attacker could authenticate using some other user's OTP
         # device.
-        if (device is not None) and (device.user_id != user.id):
+        if (device is not None) and (device.user_id != user.pk):
             device = None
 
         return device
@@ -120,14 +138,18 @@ class OTPAuthenticationFormMixin(object):
             challenge = device.generate_challenge() if (device is not None) else None
         except Exception as e:
             raise forms.ValidationError(
-                self.otp_error_messages['challenge_exception'].format(e), code='challenge_exception'
+                self.otp_error_messages['challenge_exception'].format(e),
+                code='challenge_exception',
             )
         else:
             if challenge is None:
-                raise forms.ValidationError(self.otp_error_messages['not_interactive'], code='not_interactive')
+                raise forms.ValidationError(
+                    self.otp_error_messages['not_interactive'], code='not_interactive'
+                )
             else:
                 raise forms.ValidationError(
-                    self.otp_error_messages['challenge_message'].format(challenge), code='challenge_message'
+                    self.otp_error_messages['challenge_message'].format(challenge),
+                    code='challenge_message',
                 )
 
     def _verify_token(self, user, token, device=None):
@@ -135,19 +157,28 @@ class OTPAuthenticationFormMixin(object):
             verify_is_allowed, extra = device.verify_is_allowed()
             if not verify_is_allowed:
                 # Try to match specific conditions we know about.
-                if ('reason' in extra and extra['reason'] == VerifyNotAllowed.N_FAILED_ATTEMPTS):
-                    raise forms.ValidationError(self.otp_error_messages['n_failed_attempts'] % extra)
+                if (
+                    'reason' in extra
+                    and extra['reason'] == VerifyNotAllowed.N_FAILED_ATTEMPTS
+                ):
+                    raise forms.ValidationError(
+                        self.otp_error_messages['n_failed_attempts'] % extra
+                    )
                 if 'error_message' in extra:
                     raise forms.ValidationError(extra['error_message'])
                 # Fallback to generic message otherwise.
-                raise forms.ValidationError(self.otp_error_messages['verification_not_allowed'])
+                raise forms.ValidationError(
+                    self.otp_error_messages['verification_not_allowed']
+                )
 
             device = device if device.verify_token(token) else None
         else:
             device = match_token(user, token)
 
         if device is None:
-            raise forms.ValidationError(self.otp_error_messages['invalid_token'], code='invalid_token')
+            raise forms.ValidationError(
+                self.otp_error_messages['invalid_token'], code='invalid_token'
+            )
 
         return device
 
@@ -227,15 +258,18 @@ class OTPAuthenticationForm(OTPAuthenticationFormMixin, AuthenticationForm):
     :class:`OTPAuthenticationFormMixin`.
 
     """
+
     otp_device = forms.CharField(required=False, widget=forms.Select)
-    otp_token = forms.CharField(required=False, widget=forms.TextInput(attrs={'autocomplete': 'off'}))
+    otp_token = forms.CharField(
+        required=False, widget=forms.TextInput(attrs={'autocomplete': 'off'})
+    )
 
     # This is a placeholder field that allows us to detect when the user clicks
     # the otp_challenge submit button.
     otp_challenge = forms.CharField(required=False)
 
     def clean(self):
-        self.cleaned_data = super(OTPAuthenticationForm, self).clean()
+        self.cleaned_data = super().clean()
         self.clean_otp(self.get_user())
 
         return self.cleaned_data
@@ -245,22 +279,9 @@ class OTPTokenForm(OTPAuthenticationFormMixin, forms.Form):
     """
     A form that verifies an authenticated user. It looks very much like
     :class:`~django_otp.forms.OTPAuthenticationForm`, but without the username
-    and password. The first argument must be an authenticated user; you can use
-    this in place of :class:`~django.contrib.auth.forms.AuthenticationForm` by
-    currying it::
-
-        from functools import partial
-
-        from django.contrib.auth.decoratorrs import login_required
-        from django.contrib.auth.views import login
-
-
-        @login_required
-        def verify(request):
-            form_cls = partial(OTPTokenForm, request.user)
-
-            return login(request, template_name='my_verify_template.html', authentication_form=form_cls)
-
+    and password. The first argument must be an authenticated user; for an
+    example of using this in a login view, see the source for
+    :class:`django_otp.views.LoginView`.
 
     This form will ask the user to choose one of their registered devices and
     enter an OTP token. Validation will succeed if the token is verified. See
@@ -277,18 +298,21 @@ class OTPTokenForm(OTPAuthenticationFormMixin, forms.Form):
     :type request: :class:`~django.http.HttpRequest`
 
     """
+
     otp_device = forms.ChoiceField(choices=[])
-    otp_token = forms.CharField(required=False, widget=forms.TextInput(attrs={'autocomplete': 'off'}))
+    otp_token = forms.CharField(
+        required=False, widget=forms.TextInput(attrs={'autocomplete': 'off'})
+    )
     otp_challenge = forms.CharField(required=False)
 
     def __init__(self, user, request=None, *args, **kwargs):
-        super(OTPTokenForm, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
         self.user = user
         self.fields['otp_device'].choices = self.device_choices(user)
 
     def clean(self):
-        super(OTPTokenForm, self).clean()
+        super().clean()
 
         self.clean_otp(self.user)
 
